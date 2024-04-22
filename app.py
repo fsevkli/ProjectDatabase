@@ -5,6 +5,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import re
+import numpy as np
 
 # Connect to MySQL database
 db = mysql.connector.connect(
@@ -20,28 +21,162 @@ cursor = db.cursor()
 root = tk.Tk()
 root.title("Stock Data Viewer")
 
+
+def calculate_growth():
+    stock_name1 = stock_dropdown1.get()
+    stock_name2 = stock_dropdown2.get()
+    start_date_str = start_date_entry.get()  # Get the start date string
+    end_date_str = end_date_entry.get()      # Get the end date string
+
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')  # Try parsing as YYYY-MM-DD
+        except ValueError:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m')  # Try parsing as YYYY-MM
+            except ValueError:
+                start_date = datetime.strptime(start_date_str, '%Y')  # Try parsing as YYYY
+    else:
+        # If start date is empty, set it to the oldest date available in the database
+        if stock_name1 or stock_name2:
+            if stock_name1:
+                cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name1}`")
+                min_date_result = cursor.fetchone()[0]
+            elif stock_name2:
+                cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name2}`")
+                min_date_result = cursor.fetchone()[0]
+            min_date = min_date_result.strftime('%Y-%m-%d') if min_date_result else None
+            start_date = datetime.strptime(min_date, '%Y-%m-%d') if min_date else None
+        else:
+            start_date = None
+
+    # Parse end date string
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')  # Try parsing as YYYY-MM-DD
+        except ValueError:
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m')  # Try parsing as YYYY-MM
+            except ValueError:
+                end_date = datetime.strptime(end_date_str, '%Y')  # Try parsing as YYYY
+    else:
+        # If end date is empty, set it to the newest date available in the database
+        if stock_name1 or stock_name2:
+            if stock_name1:
+                cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name1}`")
+                max_date_result = cursor.fetchone()[0]
+            elif stock_name2:
+                cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name2}`")
+                max_date_result = cursor.fetchone()[0]
+            max_date = max_date_result.strftime('%Y-%m-%d') if max_date_result else None
+            end_date = datetime.strptime(max_date, '%Y-%m-%d') if max_date else None
+        else:
+            end_date = None
+
+    if start_date and end_date:
+        start_year, start_month, start_day = start_date.year, start_date.month, start_date.day
+        end_year, end_month, end_day = end_date.year, end_date.month, end_date.day
+
+        if start_year < 1999 or end_year > 2022:
+            result_text.delete('1.0', tk.END)
+            result_text.insert(tk.END, "Year range should be between 1999 and 2022.")
+            return
+
+        if stock_name1 and not stock_name2:
+            calculate_single_growth(stock_name1, start_year, end_year)
+        elif stock_name1 and stock_name2:
+            result_text.insert(tk.END, f"Comparing growth between {stock_name1} and {stock_name2} during {start_year}-{end_year}:\n")
+            calculate_double_growth(stock_name1, stock_name2, start_year, end_year)
+        else:
+            result_text.insert(tk.END, "Please select at least one stock.\n")
+
 def validate_date_format(date):
-    patterns = [r'^\d{4}$', r'^\d{4}-\d{2}$', r'^\d{4}-\d{2}-\d{2}$', r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$']
+    patterns = [
+        r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD
+        r'^\d{4}-\d{2}$',         # YYYY-MM
+        r'^\d{4}$'                # YYYY
+    ]
     for pattern in patterns:
         if re.match(pattern, date):
             return True
     return False
 
-def validate_date_entries():
-    start_date = start_date_entry.get()
-    end_date = end_date_entry.get()
+def parse_date(date_str):
+    if date_str is None:
+        return None
 
-    if not validate_date_format(start_date):
-        result_text.delete('1.0', tk.END)
-        result_text.insert(tk.END, "Please enter a valid start date (YYYY or YYYY-MM or YYYY-MM-DD or YYYY-MM-DD HH:MM:SS).\n")
-        return False
+    if isinstance(date_str, datetime):
+        return date_str
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(date_str, '%Y-%m')
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(date_str, '%Y')
+    except ValueError:
+        raise ValueError("Invalid date format. Please use YYYY, YYYY-MM, YYYY-MM-DD, or YYYY-MM-DD HH:MM:SS.")
 
-    if not validate_date_format(end_date):
-        result_text.delete('1.0', tk.END)
-        result_text.insert(tk.END, "Please enter a valid end date (YYYY or YYYY-MM or YYYY-MM-DD or YYYY-MM-DD HH:MM:SS).\n")
-        return False
 
-    return True
+def validate_date_entries(start_date_entry, end_date_entry, result_text, stock_name1, stock_name2, cursor):
+    start_date_str = start_date_entry.get()
+    end_date_str = end_date_entry.get()
+
+    # If start date is empty, set it to the oldest date available in the database
+    if not start_date_str:
+        if stock_name1 or stock_name2:
+            if stock_name1:
+                cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name1}`")
+                min_date_result = cursor.fetchone()[0]
+            elif stock_name2:
+                cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name2}`")
+                min_date_result = cursor.fetchone()[0]
+            min_date = min_date_result.strftime('%Y-%m-%d') if min_date_result else None
+            start_date = datetime.strptime(min_date, '%Y-%m-%d') if min_date else None
+        else:
+            start_date = None
+    else:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')  # Try parsing as YYYY-MM-DD
+        except ValueError:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m')  # Try parsing as YYYY-MM
+            except ValueError:
+                start_date = datetime.strptime(start_date_str, '%Y')  # Try parsing as YYYY
+
+    # Parse end date string
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')  # Try parsing as YYYY-MM-DD
+        except ValueError:
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m')  # Try parsing as YYYY-MM
+            except ValueError:
+                end_date = datetime.strptime(end_date_str, '%Y')  # Try parsing as YYYY
+    else:
+        # If end date is empty, set it to the newest date available in the database
+        if stock_name1 or stock_name2:
+            if stock_name1:
+                cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name1}`")
+                max_date_result = cursor.fetchone()[0]
+            elif stock_name2:
+                cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name2}`")
+                max_date_result = cursor.fetchone()[0]
+            max_date = max_date_result.strftime('%Y-%m-%d') if max_date_result else None
+            end_date = datetime.strptime(max_date, '%Y-%m-%d') if max_date else None
+        else:
+            end_date = None
+
+    # Perform additional validation or processing with start_date and end_date
+    return start_date, end_date
+
 
 # Function to execute the SQL query
 def execute_query():
@@ -123,9 +258,6 @@ def calculate_double_growth(stock_name1, stock_name2, start_year, end_year):
         # Calculate the difference in growth rates
         growth_difference = growth_rate1 - growth_rate2
         
-        result_text.insert(tk.END, f"{stock_name1} growth rate: {growth_rate1:.2f}%\n")
-        result_text.insert(tk.END, f"{stock_name2} growth rate: {growth_rate2:.2f}%\n")
-        
         if growth_difference > 0:
             result_text.insert(tk.END, f"{stock_name1} has a higher growth rate compared to {stock_name2} by {abs(growth_difference):.2f}%.\n")
         elif growth_difference < 0:
@@ -135,67 +267,11 @@ def calculate_double_growth(stock_name1, stock_name2, start_year, end_year):
     else:
         result_text.insert(tk.END, "Error: Unable to calculate growth rates for one or both of the selected stocks.\n")
 
-
-
-def calculate_growth():
     stock_name1 = stock_dropdown1.get()
     stock_name2 = stock_dropdown2.get()
     start_date_str = start_date_entry.get()  # Get the start date string
     end_date_str = end_date_entry.get()      # Get the end date string
 
-    try:
-        # Parse start date and end date strings into datetime objects
-        start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-    except ValueError:
-        try:
-            # If ValueError is raised, try parsing with a different format (only year-month-day)
-            start_date = datetime.strptime(start_date_str, '%Y-%m')
-            end_date = datetime.strptime(end_date_str, '%Y-%m')
-        except ValueError:
-            try:
-                # If ValueError is raised again, try parsing with yet another format (only year)
-                start_date = datetime.strptime(start_date_str, '%Y')
-                end_date = datetime.strptime(end_date_str, '%Y')
-            except ValueError:
-                try:
-                    # If ValueError is raised again, try parsing with the format (YYYY-MM-DD)
-                    start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
-                    end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-                except ValueError:
-                    # If all attempts fail, raise an error
-                    raise ValueError("Invalid date format. Please use 'YYYY-MM-DD', 'YYYY-MM', or 'YYYY'.")
-
-    start_year, start_month, start_day = start_date.year, start_date.month, start_date.day
-    end_year, end_month, end_day = end_date.year, end_date.month, end_date.day
-
-    if start_year < 1999 or end_year > 2022:
-        result_text.delete('1.0', tk.END)
-        result_text.insert(tk.END, "Year range should be between 1999 and 2022.")
-        return
-
-    if stock_name1 and not stock_name2:
-        calculate_single_growth(stock_name1, start_year, end_year)
-    elif stock_name1 and stock_name2:
-        result_text.insert(tk.END, f"Comparing growth between {stock_name1} and {stock_name2} during {start_year}-{end_year}:\n")
-        calculate_double_growth(stock_name1, stock_name2, start_year, end_year)
-    else:
-        result_text.insert(tk.END, "Please select at least one stock.\n")
-
-def visualize_growth():
-    # Get the selected stock names
-    stock_name1 = stock_dropdown1.get()
-    stock_name2 = stock_dropdown2.get()
-    start_date_str = start_date_entry.get()  # Get the start date string
-    end_date_str = end_date_entry.get()      # Get the end date string
-
-    # Check if at least one stock is selected
-    if not stock_name1 and not stock_name2:
-        result_text.delete('1.0', tk.END)
-        result_text.insert(tk.END, "Please select at least one stock.")
-        return
-
-    # Parse start date string
     if start_date_str:
         try:
             start_date = datetime.strptime(start_date_str, '%Y-%m-%d')  # Try parsing as YYYY-MM-DD
@@ -206,9 +282,17 @@ def visualize_growth():
                 start_date = datetime.strptime(start_date_str, '%Y')  # Try parsing as YYYY
     else:
         # If start date is empty, set it to the oldest date available in the database
-        cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name1}`")
-        min_date = cursor.fetchone()[0]
-        start_date = datetime.strptime(min_date, '%Y-%m-%d')
+        if stock_name1 or stock_name2:
+            if stock_name1:
+                cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name1}`")
+                min_date_result = cursor.fetchone()[0]
+            elif stock_name2:
+                cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name2}`")
+                min_date_result = cursor.fetchone()[0]
+            min_date = min_date_result.strftime('%Y-%m-%d') if min_date_result else None
+            start_date = datetime.strptime(min_date, '%Y-%m-%d') if min_date else None
+        else:
+            start_date = None
 
     # Parse end date string
     if end_date_str:
@@ -220,18 +304,61 @@ def visualize_growth():
             except ValueError:
                 end_date = datetime.strptime(end_date_str, '%Y')  # Try parsing as YYYY
     else:
-        # If end date is empty, set it to the most recent date available in the database
-        cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name1}`")
-        max_date = cursor.fetchone()[0]
-        end_date = datetime.strptime(max_date, '%Y-%m-%d')
+        # If end date is empty, set it to the newest date available in the database
+        if stock_name1 or stock_name2:
+            if stock_name1:
+                cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name1}`")
+                max_date_result = cursor.fetchone()[0]
+            elif stock_name2:
+                cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name2}`")
+                max_date_result = cursor.fetchone()[0]
+            max_date = max_date_result.strftime('%Y-%m-%d') if max_date_result else None
+            end_date = datetime.strptime(max_date, '%Y-%m-%d') if max_date else None
+        else:
+            end_date = None
 
-    # Format start and end dates as strings for SQL query
-    start_date_sql = start_date.strftime('%Y-%m-%d')
-    end_date_sql = end_date.strftime('%Y-%m-%d')
+    if start_date and end_date:
+        start_year, start_month, start_day = start_date.year, start_date.month, start_date.day
+        end_year, end_month, end_day = end_date.year, end_date.month, end_date.day
+
+        if start_year < 1999 or end_year > 2022:
+            result_text.delete('1.0', tk.END)
+            result_text.insert(tk.END, "Year range should be between 1999 and 2022.")
+            return
+
+        if stock_name1 and not stock_name2:
+            calculate_single_growth(stock_name1, start_year, end_year)
+        elif stock_name1 and stock_name2:
+            result_text.insert(tk.END, f"Comparing growth between {stock_name1} and {stock_name2} during {start_year}-{end_year}:\n")
+            calculate_double_growth(stock_name1, stock_name2, start_year, end_year)
+        else:
+            result_text.insert(tk.END, "Please select at least one stock.\n")
+
+   
+def visualize_growth():
+    # Get the selected stock names
+    stock_name1 = stock_dropdown1.get()
+    stock_name2 = stock_dropdown2.get()
+    start_date_str = start_date_entry.get()  # Get the start date string
+    end_date_str = end_date_entry.get()      # Get the end date string
+
+    # Validate date format and entries
+    if not validate_date_format(start_date_str) or not validate_date_format(end_date_str):
+        # Handle invalid date format
+        result_text.delete('1.0', tk.END)
+        result_text.insert(tk.END, "Invalid date format. Please use YYYY, YYYY-MM, YYYY-MM-DD, or YYYY-MM-DD HH:MM:SS.")
+        return
+
+    start_date, end_date = validate_date_entries(start_date_entry, end_date_entry, result_text, stock_name1, stock_name2, cursor)
+    if start_date is None or end_date is None:
+        # Handle invalid date entries
+        result_text.delete('1.0', tk.END)
+        result_text.insert(tk.END, "Invalid date entries.")
+        return
 
     # Plotting for one stock
     if stock_name1 and not stock_name2:
-        query = f"SELECT Date, Close FROM stocks.`{stock_name1}` WHERE Date BETWEEN '{start_date_sql}' AND '{end_date_sql}' ORDER BY Date;"
+        query = f"SELECT Date, Close FROM stocks.`{stock_name1}` WHERE Date BETWEEN '{start_date}' AND '{end_date}' ORDER BY Date;"
         cursor.execute(query)
         rows = cursor.fetchall()
 
@@ -244,7 +371,7 @@ def visualize_growth():
             ax.plot(dates, closes, label=stock_name1)
             ax.set_title(f"{stock_name1} Stock Growth Fluctuation")
             ax.set_xlabel("Date")
-            ax.set_ylabel("Close Price")
+            ax.set_ylabel("Close Price in Dollars")
             plt.xticks(rotation=90)
             ax.legend()
 
@@ -263,11 +390,11 @@ def visualize_growth():
 
     # Plotting for two stocks
     elif stock_name1 and stock_name2:
-        query1 = f"SELECT Date, Close FROM stocks.`{stock_name1}` WHERE Date BETWEEN '{start_date_sql}' AND '{end_date_sql}' ORDER BY Date;"
+        query1 = f"SELECT Date, Close FROM stocks.`{stock_name1}` WHERE Date BETWEEN '{start_date}' AND '{end_date}' ORDER BY Date;"
         cursor.execute(query1)
         rows1 = cursor.fetchall()
 
-        query2 = f"SELECT Date, Close FROM stocks.`{stock_name2}` WHERE Date BETWEEN '{start_date_sql}' AND '{end_date_sql}' ORDER BY Date;"
+        query2 = f"SELECT Date, Close FROM stocks.`{stock_name2}` WHERE Date BETWEEN '{start_date}' AND '{end_date}' ORDER BY Date;"
         cursor.execute(query2)
         rows2 = cursor.fetchall()
 
@@ -302,6 +429,93 @@ def visualize_growth():
     else:
         result_text.delete('1.0', tk.END)
         result_text.insert(tk.END, "Please select at least one stock.")
+
+
+def clear_inputs_and_visualization():
+    # Clear input fields
+    start_date_entry.delete(0, tk.END)
+    end_date_entry.delete(0, tk.END)
+    stock_dropdown1.set('')
+    stock_dropdown2.set('')
+
+    # Clear visualization
+    for widget in frame1.winfo_children():
+        if isinstance(widget, tk.Canvas):
+            widget.destroy()
+    result_text.delete('1.0', tk.END)
+
+
+
+def calculate_and_display_volatility(*stock_names):
+    start_date_str = start_date_entry.get()
+    end_date_str = end_date_entry.get()
+
+    # Parse start date string
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')  # Try parsing as YYYY-MM-DD
+        except ValueError:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m')  # Try parsing as YYYY-MM
+            except ValueError:
+                start_date = datetime.strptime(start_date_str, '%Y')  # Try parsing as YYYY
+    else:
+        # If start date is empty, set it to the oldest date available in the database
+        if stock_names:
+            for stock_name in stock_names:
+                cursor.execute(f"SELECT MIN(Date) FROM stocks.`{stock_name}`")
+                min_date_result = cursor.fetchone()[0]
+                if min_date_result:
+                    min_date = min_date_result.strftime('%Y-%m-%d')
+                    start_date = datetime.strptime(min_date, '%Y-%m-%d')
+                    break
+        else:
+            start_date = None
+
+    # Parse end date string
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')  # Try parsing as YYYY-MM-DD
+        except ValueError:
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m')  # Try parsing as YYYY-MM
+            except ValueError:
+                end_date = datetime.strptime(end_date_str, '%Y')  # Try parsing as YYYY
+    else:
+        # If end date is empty, set it to the newest date available in the database
+        if stock_names:
+            for stock_name in stock_names:
+                cursor.execute(f"SELECT MAX(Date) FROM stocks.`{stock_name}`")
+                max_date_result = cursor.fetchone()[0]
+                if max_date_result:
+                    max_date = max_date_result.strftime('%Y-%m-%d')
+                    end_date = datetime.strptime(max_date, '%Y-%m-%d')
+                    break
+        else:
+            end_date = None
+
+    if start_date and end_date:
+        result_text.delete('1.0', tk.END)
+        for stock_name in stock_names:
+            volatility = calculate_price_volatility(stock_name, start_date, end_date)
+            if volatility is not None:
+                result_text.insert(tk.END, f"Price volatility for {stock_name} between {start_date} and {end_date}: {volatility:.2f}%\n")
+            else:
+                result_text.insert(tk.END, f"Not enough data to calculate price volatility for {stock_name} within the specified time frame.\n")
+
+def calculate_price_volatility(stock_name, start_date, end_date):
+    start_date = f"'{start_date.strftime('%Y-%m-%d')}'"
+    end_date = f"'{end_date.strftime('%Y-%m-%d')}'"
+
+    query = f"SELECT Close FROM stocks.`{stock_name}` WHERE Date BETWEEN {start_date} AND {end_date} ORDER BY Date;"
+    cursor.execute(query)
+    closing_prices = [row[0] for row in cursor.fetchall()]
+
+    if len(closing_prices) < 2:
+        return None  # Insufficient data for calculation
+
+    price_volatility = np.std(closing_prices)
+    return price_volatility
 
 frame1 = ttk.Frame(root)
 frame1.pack(fill='both', expand=True)
@@ -347,5 +561,11 @@ visualize_growth_button.grid(row=1, column=11, padx=5, pady=5)
 # Calculate Growth button
 calculate_growth_button = tk.Button(frame1, text="Calculate Growth", command=calculate_growth)
 calculate_growth_button.grid(row=2, column=10, columnspan=2, padx=5, pady=5)
+
+clear_button = tk.Button(frame1, text="Clear", command=clear_inputs_and_visualization)
+clear_button.grid(row=1, column=12, columnspan=2, padx=5, pady=5)
+
+calculate_volatility_button = tk.Button(frame1, text="Calculate Price Volatility", command=lambda: calculate_and_display_volatility(stock_dropdown1.get(), stock_dropdown2.get()))
+calculate_volatility_button.grid(row=2, column=13, columnspan=2, padx=5, pady=5)
 
 root.mainloop()
