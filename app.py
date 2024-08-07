@@ -9,11 +9,11 @@ import re
 
 # Connect to MySQL database
 db = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="admin",
-    database="stocks",
-    port=3306
+    host=os.getenv('DB_HOST'),
+    user=os.getenv('DB_USER'),
+    password=os.getenv('DB_PASSWORD'),
+    database=os.getenv('DB_NAME'),
+    port=int(os.getenv('DB_PORT', 3306))
 )
 cursor = db.cursor()
 
